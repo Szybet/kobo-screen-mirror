@@ -24,6 +24,7 @@ pub fn run(handler: Arc<NodeHandler<()>>, listener: NodeListener<()>, tx_to_gui:
             tx_to_gui.send(ThreadCom::ClientConnected(endpoint, _listener_id)).unwrap();
         }
         NetEvent::Message(endpoint, input_data) => {
+            debug!("Received raw input data with length: {}", input_data.len());
             let message: FromClientMessage = bincode::deserialize(input_data).unwrap();
             match message {
                 FromClientMessage::Ping => {
@@ -32,6 +33,14 @@ pub fn run(handler: Arc<NodeHandler<()>>, listener: NodeListener<()>, tx_to_gui:
                     let output_data = bincode::serialize(&FromServerMessage::Pong).unwrap();
                     info!("Sending Pong");
                     handler.network().send(endpoint, &output_data);
+                }
+                FromClientMessage::Screen(file) => {
+                    debug!("Received Screen from client");
+                    tx_to_gui.send(ThreadCom::Screen(file)).unwrap();
+                }
+                FromClientMessage::ScreenSize((x, y)) => {
+                    debug!("Received Screen size from client");
+                    tx_to_gui.send(ThreadCom::ScreenSize((x, y))).unwrap();
                 }
             }
         }

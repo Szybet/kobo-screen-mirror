@@ -1,5 +1,8 @@
+#![deny(clippy::useless_attribute)]
+#![allow(clippy::single_match)]
+
 // Logging
-use log::{debug, info, warn};
+use log::{info, debug};
 
 // Network
 use crate::api::{FromClientMessage, FromServerMessage};
@@ -8,7 +11,7 @@ use message_io::node::{self, NodeEvent};
 use std::time::Duration;
 
 // Device
-use crate::device::click;
+use crate::device::{click, get_screen, get_screen_size};
 
 pub fn run(transport: Transport, remote_addr: RemoteAddr) {
     let (handler, listener) = node::split();
@@ -38,14 +41,25 @@ pub fn run(transport: Transport, remote_addr: RemoteAddr) {
             }
             NetEvent::Accepted(_, _) => unreachable!(), // Only generated when a listener accepts
             NetEvent::Message(_, input_data) => {
+                debug!("Received raw input data with length: {}", input_data.len());
                 let message: FromServerMessage = bincode::deserialize(input_data).unwrap();
                 match message {
                     FromServerMessage::Pong => {
-                        info!("Received Pong from server");
+                        info!("Received Pong from server, sending screen size");
+                        let message = FromClientMessage::ScreenSize(get_screen_size());
+                        let output_data = bincode::serialize(&message).unwrap();
+                        handler.network().send(server_id, &output_data);
                     }
                     FromServerMessage::Click(x, y) => {
                         info!("Received Click from server: x:{} y:{}", x, y);
                         click(x, y);
+                    }
+                    FromServerMessage::RequestScreen => {
+                        debug!("Received screen request");
+                        let message = FromClientMessage::Screen(get_screen());
+                        let output_data = bincode::serialize(&message).unwrap();
+                        debug!("Sending raw screen data with length: {}", output_data.len());
+                        handler.network().send(server_id, &output_data);
                     }
                 }
             }
@@ -62,6 +76,7 @@ pub fn run(transport: Transport, remote_addr: RemoteAddr) {
                 handler.network().send(server_id, &output_data);
                 //handler.signals().send_with_timer(Signal::Greet, Duration::from_secs(1));
             }
+            _ => {}
         },
     });
 }
