@@ -17,7 +17,10 @@ fn main() {
     // Arguments
     let remote_addr = "192.168.2.3:24356";
     //let remote_addr = "127.0.0.1:24356";
+    
+    loop {
+        let remote_addr = remote_addr.to_remote_addr().unwrap();
+        client::run(Transport::Ws, remote_addr);
+    }
 
-    let remote_addr = remote_addr.to_remote_addr().unwrap();
-    client::run(Transport::Ws, remote_addr);
 }

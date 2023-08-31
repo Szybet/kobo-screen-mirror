@@ -47,6 +47,7 @@ struct GuiVars {
     cursor_count: i32, // For some reason it reports 3 events, so let's ignore them
     image: Option<RetainedImage>,
     imageSize: Option<Vec2>,
+    init_screen_size: Option<Vec2>,
 }
 
 impl GuiVars {
@@ -55,12 +56,16 @@ impl GuiVars {
             cursor_count: 0,
             image: None,
             imageSize: None,
+            init_screen_size: None,
         }
     }
 }
 
 // The order of applying changes is from up to down
 struct InputOptions {
+    // Regulart shifts
+    add_to_y: f32,
+    add_to_x: f32,
     invert_x: bool,
     invert_y: bool,
     invert_x_with_y: bool,
@@ -93,11 +98,17 @@ impl Default for MyApp {
         let port = 24356;
         let transport = Transport::Ws;
         let input_options = InputOptions {
+            add_to_y: -9.0,
+            add_to_x: -8.0,
             invert_x: true,
             invert_y: false,
             invert_x_with_y: true,
         };
-        let screen_delay_ms = 200;
+        // 1100 uses 30% of cpu
+        // 400 uses 100%
+        // Using native fbink should help ;p
+        let screen_delay_ms = 1100;
+        let initial_screen_size = Some((500, 500));
 
         // Threads
         let (tx_to_gui, rx_to_gui) = mpsc::channel();
@@ -142,7 +153,7 @@ impl eframe::App for MyApp {
                         self.endpoint = Some(endpoint);
                         debug!("Creating screen refresh thread");
                         let network_handler_image_delay = self.network_handler.clone();
-                        
+
                         let delay = self.screen_delay_ms as u64;
 
                         thread::spawn(move || {
@@ -150,7 +161,8 @@ impl eframe::App for MyApp {
                                 // TODO: sync, make clicks deliver always, add thread to client for launching fbgrab, sync it too
                                 thread::sleep(time::Duration::from_millis(delay));
                                 debug!("Refreshing screen");
-                                let data = bincode::serialize(&FromServerMessage::RequestScreen).unwrap();
+                                let data =
+                                    bincode::serialize(&FromServerMessage::RequestScreen).unwrap();
                                 network_handler_image_delay.network().send(endpoint, &data);
                             }
                         });
@@ -171,7 +183,6 @@ impl eframe::App for MyApp {
                         ui.set_min_size(vec);
                         self.gui.imageSize = Some(vec);
                     }
-                    
                 }
             }
 
@@ -179,9 +190,20 @@ impl eframe::App for MyApp {
                 if self.gui.cursor_count == 0 {
                     debug!("Cursor clicked at: {:?}", pos);
                     let mut pos_final = pos;
+                    pos_final.y += self.input_options.add_to_y as f32;
+                    pos_final.x += self.input_options.add_to_x as f32;
 
                     // Adjust input
                     if let Some(image_size) = &self.gui.imageSize {
+                        // Map the value to the size...
+                        let app_size = ui.available_size();
+                        debug!("App size: {:?}", app_size);
+                        let scale_x = image_size.x / app_size.x;
+                        let scale_y = image_size.y / app_size.y;
+                        debug!("scale_x:{} scale_y:{}", scale_x, scale_y);
+                        pos_final.x *= scale_x;
+                        pos_final.y *= scale_y;
+
                         if self.input_options.invert_x {
                             pos_final.x = image_size.x - pos_final.x;
                         }
@@ -189,14 +211,17 @@ impl eframe::App for MyApp {
                             pos_final.y = image_size.y - pos_final.y;
                         }
                     } else {
-                        error!("Failed to invert input, screen size is missing");
+                        error!("Failed to adjust input, screen size is missing");
                     }
 
                     if self.input_options.invert_x_with_y {
                         std::mem::swap(&mut pos_final.x, &mut pos_final.y);
                     }
-                    
-                    self.send_network(FromServerMessage::Click(pos_final.x as u16, pos_final.y as u16)); // test
+
+                    self.send_network(FromServerMessage::Click(
+                        pos_final.x as u16,
+                        pos_final.y as u16,
+                    ));
                 }
                 self.gui.cursor_count += 1;
                 if self.gui.cursor_count >= 3 {
@@ -205,12 +230,8 @@ impl eframe::App for MyApp {
             }
 
             if let Some(image) = &self.gui.image {
-                if let Some(image_size) = &self.gui.imageSize {
-                    //debug!("Showing image");
-                    image.show_size(ui, *image_size);
-                } else {
-                    error!("Failed to set image, image size is missing");
-                }
+                //debug!("Showing image");
+                image.show_size(ui, ui.available_size());
             }
 
             ctx.request_repaint_after(time::Duration::from_millis(self.screen_delay_ms as u64 / 5));

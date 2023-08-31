@@ -9,7 +9,7 @@ pub fn click(x: u16, y: u16) {
         .arg("/dev/input/event1")
         .arg(x.to_string())
         .arg(y.to_string())
-        .output()
+        .status()
         .expect("failed to execute process");
 
     //debug!("Command output: {:?}", res.stdout);
@@ -23,7 +23,7 @@ pub fn get_screen() -> Vec<u8> {
         .arg("-z")
         .arg("0")
         .arg("/tmp/mirror.png")
-        .output()
+        .status()
         .expect("failed to execute process");
 
     //debug!("Command output: {:?}", res.stdout);

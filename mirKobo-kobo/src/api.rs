@@ -6,6 +6,7 @@ pub enum FromClientMessage {
     Screen(Vec<u8>),
     //ChunkSize(usize), // Used when a message is potentially to big - not needed in websockets, yay
     ScreenSize((u32, u32)), // x, y
+    //Done, // Indicates it's done with the previous message
 }
 
 #[derive(Serialize, Deserialize, Debug)]
