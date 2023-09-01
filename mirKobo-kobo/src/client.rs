@@ -8,12 +8,15 @@ use log::{debug, error, info};
 use crate::api::{FromClientMessage, FromServerMessage};
 use message_io::network::{NetEvent, RemoteAddr, Transport};
 use message_io::node::{self, NodeEvent};
-use std::sync::{mpsc, Arc, Mutex};
-use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 // Device
 use crate::device::{click, get_screen, get_screen_size};
+
+// Other
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Duration;
+use crate::Args;
 
 // We don't allow to loose any of those events
 enum ImportantJobs {
@@ -27,7 +30,7 @@ enum LooseJobs {
     Stop,
 }
 
-pub fn run(transport: Transport, remote_addr: RemoteAddr) {
+pub fn run(transport: Transport, remote_addr: RemoteAddr, args: &Args) {
     let (handler_regular, listener) = node::split();
     let handler = Arc::new(handler_regular);
 
@@ -37,12 +40,13 @@ pub fn run(transport: Transport, remote_addr: RemoteAddr) {
         .unwrap();
 
     let (tx_to_imp, rx_to_imp) = mpsc::channel(); // We want not synced because we don't want to loose any input
+    let touch_emulate_path = args.touch_emulate_path.clone();
     thread::spawn(move || loop {
         if let Ok(event) = rx_to_imp.recv() {
             match event {
                 ImportantJobs::SendClick(x, y) => {
                     info!("Received Click from server: x:{} y:{}", x, y);
-                    click(x, y);
+                    click(x, y, &touch_emulate_path);
                 }
                 ImportantJobs::Stop => {
                     break;
@@ -53,11 +57,12 @@ pub fn run(transport: Transport, remote_addr: RemoteAddr) {
 
     let (tx_to_loose, rx_to_loose) = mpsc::sync_channel(1); // We want synced channel because of try_send
     let handler_thread = handler.clone();
+    let fbgrab_path = args.fbgrab_path.clone();
     thread::spawn(move || loop {
         if let Ok(event) = rx_to_loose.recv() {
             match event {
                 LooseJobs::SendScreen => {
-                    let message = FromClientMessage::Screen(get_screen());
+                    let message = FromClientMessage::Screen(get_screen(&fbgrab_path));
                     let output_data = bincode::serialize(&message).unwrap();
                     debug!("Sending raw screen data with length: {}", output_data.len());
                     handler_thread.network().send(server_id, &output_data);
@@ -99,7 +104,7 @@ pub fn run(transport: Transport, remote_addr: RemoteAddr) {
                 match message {
                     FromServerMessage::Pong => {
                         info!("Received Pong from server, sending screen size");
-                        let message = FromClientMessage::ScreenSize(get_screen_size());
+                        let message = FromClientMessage::ScreenSize(get_screen_size(&args.busybox_path));
                         let output_data = bincode::serialize(&message).unwrap();
                         handler.network().send(server_id, &output_data);
                     }

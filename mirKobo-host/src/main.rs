@@ -11,16 +11,17 @@ use log::{debug, error, info, warn};
 
 // Network
 pub use api::{FromClientMessage, FromServerMessage};
-use message_io::network::NetEvent;
 use message_io::network::{Endpoint, ResourceId, Transport};
 use message_io::node::{self, NodeHandler};
-use std::net::SocketAddr;
 use std::net::ToSocketAddrs;
 
 // Threads
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::{thread, time};
+
+// Arguments
+use clap::Parser;
 
 pub enum ThreadCom {
     ConnectionActive(bool),
@@ -46,8 +47,7 @@ fn main() -> Result<(), eframe::Error> {
 struct GuiVars {
     cursor_count: i32, // For some reason it reports 3 events, so let's ignore them
     image: Option<RetainedImage>,
-    imageSize: Option<Vec2>,
-    init_screen_size: Option<Vec2>,
+    image_size: Option<Vec2>,
 }
 
 impl GuiVars {
@@ -55,8 +55,7 @@ impl GuiVars {
         GuiVars {
             cursor_count: 0,
             image: None,
-            imageSize: None,
-            init_screen_size: None,
+            image_size: None,
         }
     }
 }
@@ -68,7 +67,7 @@ struct InputOptions {
     add_to_x: f32,
     invert_x: bool,
     invert_y: bool,
-    invert_x_with_y: bool,
+    reverse_coordinates: bool,
 }
 
 struct MyApp {
@@ -78,6 +77,7 @@ struct MyApp {
     gui: GuiVars,
     input_options: InputOptions,
     screen_delay_ms: u32,
+    initial_screen_size: Option<(u32, u32)>,
 }
 
 impl MyApp {
@@ -92,23 +92,51 @@ impl MyApp {
     }
 }
 
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+pub struct Args {
+    #[arg(short, long, help = "Network port to use", default_value_t = 24356)]
+    port: u16,
+    #[arg(short, long, help = "Shift x in pixels (compensate for window frame for example), in touch", default_value_t = -8.0)]
+    add_to_x: f32,
+    #[arg(short, long, help = "Shift y in pixels (compensate for window frame for example), in touch", default_value_t = -9.0)]
+    add_to_y: f32,
+    // Why default messages aren't shown?
+    #[arg(short, long, help = "Invert x, in touch [default: true]", default_value_t = true)]
+    invert_x: bool,
+    #[arg(short, long, help = "Invert y, in touch [default: false]", default_value_t = false)]
+    invert_y: bool,
+    #[arg(short, long, help = "Make x y and y x, in touch [default: true]", default_value_t = true)]
+    reverse_coordinates: bool,
+    #[arg(short, long, help = "Delay between screen refreshes in ms, 400 is fast but takes too much cpu, 1100 is good enough - if you want to go as fast as possible, look for \'Request for screen ignored, it's already in make\' errors on the client - it indicates that grabbing the framebuffer / network speed is the bottleneck", default_value_t = 1100)]
+    screen_delay_ms: u32,
+    #[arg(short, long, help = "Launch the app with width, initial app width 0 makes the app of the size of the ereader framebuffer", default_value_t = 450)]
+    initial_screen_x: u32,
+    #[arg(short, long, help = "Launch the app with height, initial app height 0 makes the app of the size of the ereader framebuffer", default_value_t = 600)]
+    initial_screen_y: u32,
+}
+
 impl Default for MyApp {
     fn default() -> Self {
         // Arguments
-        let port = 24356;
-        let transport = Transport::Ws;
+        let args = Args::parse();
+
+        let port = args.port;
         let input_options = InputOptions {
-            add_to_y: -9.0,
-            add_to_x: -8.0,
-            invert_x: true,
-            invert_y: false,
-            invert_x_with_y: true,
+            add_to_y: args.add_to_y,
+            add_to_x: args.add_to_x,
+            invert_x: args.invert_x,
+            invert_y: args.invert_y,
+            reverse_coordinates: args.reverse_coordinates,
         };
         // 1100 uses 30% of cpu
         // 400 uses 100%
         // Using native fbink should help ;p
-        let screen_delay_ms = 1100;
-        let initial_screen_size = Some((500, 500));
+        let screen_delay_ms = args.screen_delay_ms;
+        let mut initial_screen_size = None;
+        if args.initial_screen_x != 0 && args.initial_screen_y != 0 {
+            initial_screen_size = Some((args.initial_screen_x, args.initial_screen_y));
+        }
 
         // Threads
         let (tx_to_gui, rx_to_gui) = mpsc::channel();
@@ -117,6 +145,7 @@ impl Default for MyApp {
         let addr = ("0.0.0.0", port).to_socket_addrs().unwrap().next().unwrap();
         let (handler, listener) = node::split::<()>();
         let network_handler = Arc::new(handler);
+        let transport = Transport::Ws;
         match network_handler.network().listen(transport, addr) {
             Ok((_id, real_addr)) => info!("Server running at {} by {}", real_addr, transport),
             Err(_) => error!("Can not listening at {} by {}", addr, transport),
@@ -135,6 +164,7 @@ impl Default for MyApp {
             gui: GuiVars::new(),
             input_options,
             screen_delay_ms,
+            initial_screen_size,
         }
     }
 }
@@ -178,10 +208,14 @@ impl eframe::App for MyApp {
                     ThreadCom::ScreenSize((x, y)) => {
                         debug!("Setting ui size... x:{}, y:{}", x, y);
                         let vec = Vec2::new(x as f32, y as f32);
-                        _frame.set_window_size(vec);
+                        if let Some(size) = self.initial_screen_size {
+                            _frame.set_window_size(Vec2::new(size.0 as f32, size.1 as f32));
+                        } else {
+                            _frame.set_window_size(vec);
+                        }
                         ui.set_max_size(vec);
                         ui.set_min_size(vec);
-                        self.gui.imageSize = Some(vec);
+                        self.gui.image_size = Some(vec);
                     }
                 }
             }
@@ -190,11 +224,11 @@ impl eframe::App for MyApp {
                 if self.gui.cursor_count == 0 {
                     debug!("Cursor clicked at: {:?}", pos);
                     let mut pos_final = pos;
-                    pos_final.y += self.input_options.add_to_y as f32;
-                    pos_final.x += self.input_options.add_to_x as f32;
+                    pos_final.y += self.input_options.add_to_y;
+                    pos_final.x += self.input_options.add_to_x;
 
                     // Adjust input
-                    if let Some(image_size) = &self.gui.imageSize {
+                    if let Some(image_size) = &self.gui.image_size {
                         // Map the value to the size...
                         let app_size = ui.available_size();
                         debug!("App size: {:?}", app_size);
@@ -214,7 +248,7 @@ impl eframe::App for MyApp {
                         error!("Failed to adjust input, screen size is missing");
                     }
 
-                    if self.input_options.invert_x_with_y {
+                    if self.input_options.reverse_coordinates {
                         std::mem::swap(&mut pos_final.x, &mut pos_final.y);
                     }
 

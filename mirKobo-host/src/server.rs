@@ -1,15 +1,13 @@
 // Logging
-use log::{debug, info, warn};
+use log::{debug, info};
 
 // Network
 use crate::api::{FromClientMessage, FromServerMessage};
-use message_io::network::{NetEvent, Transport};
-use message_io::node::{self, NodeHandler, NodeListener};
-use std::net::SocketAddr;
+use message_io::network::NetEvent;
+use message_io::node::{NodeHandler, NodeListener};
 
 // Threads
 use std::sync::mpsc::Sender;
-use std::thread;
 use crate::ThreadCom;
 use std::sync::Arc;
 
