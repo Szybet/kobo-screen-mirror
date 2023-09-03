@@ -1,5 +1,6 @@
 # kobo-screen-mirror
-*Death simple* tool to mirror your kobo screen to PC if you are tired of clicking
+*Stupid simple* tool to mirror your kobo screen to PC if you are tired of clicking
+![kobo-screen-mirrorr](https://github.com/Szybet/kobo-screen-mirror/assets/53944559/225a464e-9c7b-4050-8aa1-5e214d6e02f3)
 
 This is a tool for developers, I don't see any reasons why anyone else would use it. The target audience will figure out how to use it... ;)
 
@@ -9,5 +10,5 @@ TODO: If anyone is interested in improving this:
 
 At least some notes:
 - Needed, sister project: https://github.com/Kobo-InkBox/touch_emulate
-- Sunxi SOC are stupid and won't work with this tool because the have per app buffer, blame the chinese? or kernel hacks?...
+- Sunxi SOC are stupid and won't work with this tool because they have per app buffer, blame the chinese? or kernel hacks?...
 - use USBNET
