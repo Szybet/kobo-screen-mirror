@@ -11,7 +11,7 @@ use log::{debug, error, info, warn};
 
 // Network
 pub use api::{FromClientMessage, FromServerMessage};
-use message_io::network::{Endpoint, ResourceId, Transport};
+use message_io::network::{Endpoint, ResourceId, Transport, SendStatus};
 use message_io::node::{self, NodeHandler};
 use std::net::ToSocketAddrs;
 
@@ -22,6 +22,9 @@ use std::{thread, time};
 
 // Arguments
 use clap::Parser;
+
+// Other
+use rand::Rng;
 
 pub enum ThreadCom {
     ConnectionActive(bool),
@@ -68,6 +71,9 @@ struct InputOptions {
     invert_x: bool,
     invert_y: bool,
     reverse_coordinates: bool,
+    randomise_input_offset: u32,
+    repeat_click: u32,
+    input_repeat_delay_ms: u32,
 }
 
 struct MyApp {
@@ -86,6 +92,9 @@ impl MyApp {
             let output_data = bincode::serialize(&message).unwrap();
             let status = self.network_handler.network().send(endpoint, &output_data);
             debug!("Status of message {:?} is {:?}", message, status);
+            if status != SendStatus::Sent {
+                error!("Packet not send?");
+            }
         } else {
             error!("Failed to send network message: missing endpoint");
         }
@@ -102,17 +111,68 @@ pub struct Args {
     #[arg(short, long, help = "Shift y in pixels (compensate for window frame for example), in touch", default_value_t = -9.0)]
     add_to_y: f32,
     // Why default messages aren't shown?
-    #[arg(short, long, help = "Invert x, in touch [default: true]", default_value_t = true)]
+    #[arg(
+        short,
+        long,
+        help = "Invert x, in touch [default: true]",
+        default_value_t = true
+    )]
     invert_x: bool,
-    #[arg(short, long, help = "Invert y, in touch [default: false]", default_value_t = false)]
+    #[arg(
+        short,
+        long,
+        help = "Invert y, in touch [default: false]",
+        default_value_t = false
+    )]
     invert_y: bool,
-    #[arg(short, long, help = "Make x y and y x, in touch [default: true]", default_value_t = true)]
+    #[arg(
+        short,
+        long,
+        help = "Make x y and y x, in touch [default: true]",
+        default_value_t = true
+    )]
     reverse_coordinates: bool,
-    #[arg(short, long, help = "Delay between screen refreshes in ms, 400 is fast but takes too much cpu, 1100 is good enough - if you want to go as fast as possible, look for \'Request for screen ignored, it's already in make\' errors on the client - it indicates that grabbing the framebuffer / network speed is the bottleneck", default_value_t = 1100)]
+    #[arg(
+        short,
+        long,
+        help = "Some apps (Qt ones?) ignore the second input at the exact spot. This will shift the pixel in x and y of the max value you provide, so providing 2 will make it move arround 4 pixels, left and right",
+        default_value_t = 5
+    )]
+    randomise_input_offset: u32,
+    #[arg(
+        short,
+        long,
+        help = "Delay between clicks in ms",
+        default_value_t = 0
+    )]
+    input_repeat_delay_ms: u32,
+    #[arg(
+        short,
+        long,
+        help = "How many click event to send, to make sure it worked...",
+        default_value_t = 1
+    )]
+    repeat_click: u32,
+    #[arg(
+        short,
+        long,
+        help = "Delay between screen refreshes in ms, 400 is fast but takes too much cpu, 1100 is good enough - if you want to go as fast as possible, look for \'Request for screen ignored, it's already in make\' errors on the client - it indicates that grabbing the framebuffer / network speed is the bottleneck",
+        default_value_t = 1100
+    )]
     screen_delay_ms: u32,
-    #[arg(short, long, help = "Launch the app with width, initial app width 0 makes the app of the size of the ereader framebuffer", default_value_t = 450)]
+    #[arg(
+        short,
+        long,
+        help = "Launch the app with width, initial app width 0 makes the app of the size of the ereader framebuffer",
+        default_value_t = 450
+    )]
     initial_screen_x: u32,
-    #[arg(short, long, help = "Launch the app with height, initial app height 0 makes the app of the size of the ereader framebuffer", default_value_t = 600)]
+    #[arg(
+        short,
+        long,
+        help = "Launch the app with height, initial app height 0 makes the app of the size of the ereader framebuffer",
+        default_value_t = 600
+    )]
     initial_screen_y: u32,
 }
 
@@ -128,6 +188,9 @@ impl Default for MyApp {
             invert_x: args.invert_x,
             invert_y: args.invert_y,
             reverse_coordinates: args.reverse_coordinates,
+            randomise_input_offset: args.randomise_input_offset,
+            repeat_click: args.repeat_click,
+            input_repeat_delay_ms: args.input_repeat_delay_ms,
         };
         // 1100 uses 30% of cpu
         // 400 uses 100%
@@ -222,40 +285,69 @@ impl eframe::App for MyApp {
 
             if let Some(pos) = ctx.input(|i| i.pointer.press_origin()) {
                 if self.gui.cursor_count == 0 {
-                    debug!("Cursor clicked at: {:?}", pos);
-                    let mut pos_final = pos;
-                    pos_final.y += self.input_options.add_to_y;
-                    pos_final.x += self.input_options.add_to_x;
+                    for repeat in 0..self.input_options.repeat_click {
+                        debug!("Repeat number: {}", repeat);
+                        debug!("Cursor clicked at: {:?}", pos);
+                        let mut pos_final = pos;
+                        pos_final.y += self.input_options.add_to_y;
+                        pos_final.x += self.input_options.add_to_x;
 
-                    // Adjust input
-                    if let Some(image_size) = &self.gui.image_size {
-                        // Map the value to the size...
-                        let app_size = ui.available_size();
-                        debug!("App size: {:?}", app_size);
-                        let scale_x = image_size.x / app_size.x;
-                        let scale_y = image_size.y / app_size.y;
-                        debug!("scale_x:{} scale_y:{}", scale_x, scale_y);
-                        pos_final.x *= scale_x;
-                        pos_final.y *= scale_y;
+                        // Adjust input
+                        if let Some(image_size) = &self.gui.image_size {
+                            // Map the value to the size...
+                            let app_size = ui.available_size();
+                            debug!("App size: {:?}", app_size);
+                            let scale_x = image_size.x / app_size.x;
+                            let scale_y = image_size.y / app_size.y;
+                            debug!("scale_x:{} scale_y:{}", scale_x, scale_y);
+                            pos_final.x *= scale_x;
+                            pos_final.y *= scale_y;
 
-                        if self.input_options.invert_x {
-                            pos_final.x = image_size.x - pos_final.x;
+                            // Shift randomise
+                            if self.input_options.randomise_input_offset != 0 {
+                                debug!(
+                                    "Before randomised shifting: x:{} y:{}",
+                                    pos_final.x, pos_final.y
+                                );
+                                let mut rng = rand::thread_rng();
+                                pos_final.x = rng.gen_range(
+                                    pos_final.x - self.input_options.randomise_input_offset as f32
+                                        ..pos_final.x
+                                            + self.input_options.randomise_input_offset as f32
+                                            + 1.0,
+                                ); // +1 is because rust is stupid and does -1
+                                pos_final.y = rng.gen_range(
+                                    pos_final.y - self.input_options.randomise_input_offset as f32
+                                        ..pos_final.y
+                                            + self.input_options.randomise_input_offset as f32
+                                            + 1.0,
+                                );
+                                debug!(
+                                    "After randomised shifting: x:{} y:{}",
+                                    pos_final.x, pos_final.y
+                                );
+                            }
+
+                            if self.input_options.invert_x {
+                                pos_final.x = image_size.x - pos_final.x;
+                            }
+                            if self.input_options.invert_y {
+                                pos_final.y = image_size.y - pos_final.y;
+                            }
+                        } else {
+                            error!("Failed to adjust input, screen size is missing");
                         }
-                        if self.input_options.invert_y {
-                            pos_final.y = image_size.y - pos_final.y;
+
+                        if self.input_options.reverse_coordinates {
+                            std::mem::swap(&mut pos_final.x, &mut pos_final.y);
                         }
-                    } else {
-                        error!("Failed to adjust input, screen size is missing");
-                    }
 
-                    if self.input_options.reverse_coordinates {
-                        std::mem::swap(&mut pos_final.x, &mut pos_final.y);
+                        self.send_network(FromServerMessage::Click(
+                            pos_final.x as u16,
+                            pos_final.y as u16,
+                        ));
+                        std::thread::sleep(time::Duration::from_millis(self.input_options.input_repeat_delay_ms.into()));
                     }
-
-                    self.send_network(FromServerMessage::Click(
-                        pos_final.x as u16,
-                        pos_final.y as u16,
-                    ));
                 }
                 self.gui.cursor_count += 1;
                 if self.gui.cursor_count >= 3 {
